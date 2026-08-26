@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Пропуска БЦ</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: #F4F6F9; color: #0F172A; margin: 0; }
+  header { background: #245B9D; color: #fff; padding: 14px 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
+  header .brand { font-weight: 700; font-size: 18px; }
+  header .who { font-size: 13px; text-align: right; opacity: .9; }
+  header .who .logout { cursor: pointer; text-decoration: underline; opacity: .85; }
+  nav { display: flex; gap: 6px; flex-wrap: wrap; padding: 10px 20px; background: #fff; border-bottom: 1px solid #E5E9F0; }
+  nav button { border: none; background: transparent; padding: 8px 14px; border-radius: 8px; font-size: 14px; cursor: pointer; color: #334155; }
+  nav button.active { background: #245B9D; color: #fff; }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px; }
+  .card { background: #fff; border: 1px solid #E5E9F0; border-radius: 12px; padding: 18px; margin-bottom: 16px; }
+  h1 { font-size: 20px; margin: 0 0 14px; }
+  h2 { font-size: 15px; margin: 0 0 10px; color: #334155; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #F1F5F9; }
+  th { color: #64748B; font-weight: 600; }
+  tr:hover { background: #FAFBFC; }
+  input, select, textarea { width: 100%; padding: 8px 10px; border: 1px solid #D9DFE7; border-radius: 8px; font-size: 13px; margin-bottom: 10px; }
+  label { font-size: 12px; font-weight: 600; color: #475569; display: block; margin-bottom: 4px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  button.btn { background: #245B9D; color: #fff; border: none; padding: 9px 16px; border-radius: 8px; font-size: 13px; cursor: pointer; font-weight: 600; }
+  button.btn.secondary { background: #fff; color: #245B9D; border: 1px solid #245B9D; }
+  button.btn.danger { background: #fff; color: #DC2626; border: 1px solid #DC2626; }
+  button.btn:disabled { opacity: .5; cursor: not-allowed; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .msg { padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-bottom: 12px; }
+  .msg.error { background: #FEF2F2; color: #B91C1C; }
+  .msg.ok { background: #F0FDF4; color: #15803D; }
+  .hidden { display: none !important; }
+  .link { color: #245B9D; cursor: pointer; text-decoration: underline; font-size: 13px; }
+  .loading { text-align: center; padding: 40px; color: #94A3B8; }
+
+  /* Экран входа */
+  .loginWrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .loginBox { background: #fff; border: 1px solid #E5E9F0; border-radius: 14px; padding: 32px; width: 100%; max-width: 380px; }
+  .loginBox h1 { text-align: center; margin-bottom: 6px; }
+  .loginBox p.sub { text-align: center; color: #64748B; font-size: 13px; margin: 0 0 20px; }
+  .loginBox button.btn { width: 100%; }
+</style>
+</head>
+<body>
+
+<div id="loginScreen" class="loginWrap">
+  <div class="loginBox">
+    <h1>Пропуска БЦ</h1>
+    <p class="sub" id="loginSub">Введите ваш рабочий email</p>
+    <div id="loginMsg" class="msg hidden"></div>
+
+    <div id="emailStep">
+      <label>Email</label>
+      <input id="loginEmail" type="email" placeholder="you@csi.kz" autocomplete="email">
+      <button class="btn" onclick="submitEmail()">Получить код</button>
+    </div>
+
+    <div id="codeStep" class="hidden">
+      <label>Код из письма</label>
+      <input id="loginCode" type="text" inputmode="numeric" maxlength="6" placeholder="000000">
+      <button class="btn" onclick="submitCode()">Войти</button>
+      <p style="text-align:center; margin-top:10px">
+        <span class="link" onclick="backToEmail()">Изменить email</span>
+      </p>
+    </div>
+  </div>
+</div>
+
+<div id="app" class="hidden">
+  <header>
+    <div class="brand">Пропуска БЦ</div>
+    <div class="who" id="whoBox"></div>
+  </header>
+  <nav id="navBox"></nav>
+  <main id="mainBox"></main>
+</div>
+
+<script>
+// Запросы идут через собственную серверную функцию Netlify (netlify/functions/proxy.js),
+// которая уже сама обращается к Apps Script — так браузер не сталкивается с CORS.
+const APP_URL = "/.netlify/functions/proxy";
+
+let CURRENT_USER = null;
+let API_TOKEN = localStorage.getItem("propuska_token") || null;
+let LOGIN_EMAIL = "";
+
+const STATUS_COLORS = {
+  "Черновик": "#E2E8F0",
+  "На согласовании HR": "#FEF08A",
+  "Отклонено HR": "#FCA5A5",
+  "На рассмотрении администратора БЦ": "#93C5FD",
+  "Отклонено администратором БЦ": "#FCA5A5",
+  "Передано инженеру": "#67E8F9",
+  "Карта готова": "#86EFAC",
+};
+
+function badge(status) {
+  const color = STATUS_COLORS[status] || "#E2E8F0";
+  return '<span class="badge" style="background:' + color + '">' + status + '</span>';
+}
+
+function showMsg(text, isError) {
+  const box = document.getElementById("msgBox");
+  if (!box) { showLoginMsg(text, isError); return; }
+  box.className = "msg " + (isError ? "error" : "ok");
+  box.textContent = text;
+  box.classList.remove("hidden");
+  setTimeout(() => box.classList.add("hidden"), 5000);
+}
+
+function showLoginMsg(text, isError) {
+  const box = document.getElementById("loginMsg");
+  box.className = "msg " + (isError ? "error" : "ok");
+  box.textContent = text;
+  box.classList.remove("hidden");
+}
+
+// ---------------------------------------------------------------------------
+// GET-запросы (чтение данных) — action=... в query string
+// ---------------------------------------------------------------------------
+function callGet(action, params, onSuccess) {
+  params = params || {};
+  const url = new URL(APP_URL, window.location.origin);
+  url.searchParams.set("action", action);
+  if (API_TOKEN) url.searchParams.set("token", API_TOKEN);
+  Object.keys(params).forEach((k) => {
+    if (params[k] !== null && params[k] !== undefined) url.searchParams.set(k, params[k]);
+  });
+  fetch(url.toString())
+    .then((r) => r.json())
+    .then((res) => {
+      if (!res.ok) { showMsg(res.error, true); return; }
+      onSuccess(res.data);
+    })
+    .catch((err) => showMsg("Ошибка сети: " + (err.message || err), true));
+}
+
+// ---------------------------------------------------------------------------
+// Действия (создание/изменение/подтверждение) — тоже через GET,
+// т.к. POST-запросы к Apps Script блокируются CORS-политикой браузера.
+// Сложные объекты (например, данные нового сотрудника) передаются как
+// JSON-строка в одном из query-параметров.
+// ---------------------------------------------------------------------------
+function callPost(action, data, onSuccess) {
+  callGet(action, data || {}, onSuccess);
+}
+
+// ---------------------------------------------------------------------------
+// Вход по коду с почты
+// ---------------------------------------------------------------------------
+function submitEmail() {
+  const email = document.getElementById("loginEmail").value.trim();
+  if (!email) return;
+  LOGIN_EMAIL = email;
+  document.getElementById("loginMsg").classList.add("hidden");
+  callPost("requestOtp", { email: email }, () => {
+    document.getElementById("emailStep").classList.add("hidden");
+    document.getElementById("codeStep").classList.remove("hidden");
+    document.getElementById("loginSub").textContent = "Код отправлен на " + email;
+    document.getElementById("loginCode").focus();
+  });
+}
+
+function backToEmail() {
+  document.getElementById("codeStep").classList.add("hidden");
+  document.getElementById("emailStep").classList.remove("hidden");
+  document.getElementById("loginSub").textContent = "Введите ваш рабочий email";
+  document.getElementById("loginMsg").classList.add("hidden");
+}
+
+function submitCode() {
+  const code = document.getElementById("loginCode").value.trim();
+  if (!code) return;
+  callPost("verifyOtp", { email: LOGIN_EMAIL, code: code }, (token) => {
+    API_TOKEN = token;
+    localStorage.setItem("propuska_token", token);
+    loadCurrentUser();
+  });
+}
+
+function logout() {
+  localStorage.removeItem("propuska_token");
+  API_TOKEN = null;
+  CURRENT_USER = null;
+  document.getElementById("app").classList.add("hidden");
+  document.getElementById("loginScreen").classList.remove("hidden");
+  backToEmail();
+}
+
+// ---------------------------------------------------------------------------
+// Инициализация
+// ---------------------------------------------------------------------------
+window.onload = function () {
+  if (API_TOKEN) {
+    loadCurrentUser();
+  }
+};
+
+function loadCurrentUser() {
+  callGet("getCurrentUser", {}, (user) => {
+    if (user.error) {
+      showLoginMsg(user.error, true);
+      localStorage.removeItem("propuska_token");
+      API_TOKEN = null;
+      return;
+    }
+    CURRENT_USER = user;
+    document.getElementById("loginScreen").classList.add("hidden");
+    document.getElementById("app").classList.remove("hidden");
+
+    const roleLabels = { ADMIN_BC: "Администратор БЦ", HR: "HR", OFFICE_MANAGER: "Офис-менеджер", EMPLOYEE: "Сотрудник", ENGINEER: "Инженер" };
+    document.getElementById("whoBox").innerHTML =
+      CURRENT_USER.fullName + "<br><span style='opacity:.8'>" + roleLabels[CURRENT_USER.role] + (CURRENT_USER.companyName ? " · " + CURRENT_USER.companyName : "") + "</span>" +
+      " · <span class='logout' onclick='logout()'>Выйти</span>";
+
+    renderNav();
+  });
+}
+
+const TABS_BY_ROLE = {
+  ADMIN_BC: [["companies", "Компании"], ["employees", "Сотрудники"], ["addEmployee", "Добавить сотрудника"], ["applications", "Заявки"], ["users", "Пользователи"]],
+  HR: [["employees", "Сотрудники"], ["applications", "Заявки"], ["dismissed", "Уволенные"]],
+  OFFICE_MANAGER: [["employees", "Сотрудники"], ["addEmployee", "Добавить сотрудника"], ["applications", "Заявки"]],
+  EMPLOYEE: [["profile", "Мой профиль"], ["myCards", "Мои карты"], ["myApplications", "Мои заявки"]],
+  ENGINEER: [["engineerQueue", "Заявки на выпуск"]],
+};
+
+function renderNav() {
+  const tabs = TABS_BY_ROLE[CURRENT_USER.role] || [];
+  const nav = document.getElementById("navBox");
+  nav.innerHTML = tabs.map((t) => '<button data-tab="' + t[0] + '">' + t[1] + '</button>').join("");
+  nav.querySelectorAll("button").forEach((btn) => {
+    btn.onclick = () => switchTab(btn.dataset.tab);
+  });
+  switchTab(tabs[0][0]);
+}
+
+function switchTab(tab) {
+  document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
+  const renderers = {
+    companies: renderCompanies, employees: renderEmployees, applications: renderApplications,
+    users: renderUsers, dismissed: renderDismissed, addEmployee: renderAddEmployee,
+    profile: renderProfile, myCards: renderMyCards, myApplications: renderMyApplications,
+    engineerQueue: renderEngineerQueue,
+  };
+  (renderers[tab] || (() => {}))();
+}
+
+function mainHtml(html) {
+  document.getElementById("mainBox").innerHTML = '<div id="msgBox" class="msg hidden"></div>' + html;
+}
+
+// ---------------------------------------------------------------------------
+// Компании (ADMIN_BC)
+// ---------------------------------------------------------------------------
+function renderCompanies() {
+  mainHtml('<div class="card"><h1>Компании</h1><div id="companiesList">Загрузка...</div>' +
+    '<h2 style="margin-top:20px">Добавить компанию</h2>' +
+    '<input id="newCompanyName" placeholder="Название компании">' +
+    '<button class="btn" onclick="submitNewCompany()">Добавить</button></div>');
+  callGet("getCompanies", {}, (rows) => {
+    const html = '<table><tr><th>ID</th><th>Название</th></tr>' +
+      rows.map((c) => '<tr><td>' + c["Company ID"] + '</td><td>' + c["Название"] + '</td></tr>').join("") + '</table>';
+    document.getElementById("companiesList").innerHTML = html;
+  });
+}
+function submitNewCompany() {
+  const name = document.getElementById("newCompanyName").value.trim();
+  if (!name) return;
+  callPost("createCompany", { name: name }, () => { showMsg("Компания добавлена"); renderCompanies(); });
+}
+
+// ---------------------------------------------------------------------------
+// Сотрудники
+// ---------------------------------------------------------------------------
+function renderEmployees() {
+  mainHtml('<div class="card"><h1>Сотрудники</h1><div id="employeesList">Загрузка...</div></div>');
+  callGet("getEmployees", {}, (rows) => {
+    const active = rows.filter((e) => e["Статус сотрудника"] === "Активен");
+    const html = '<table><tr><th>ФИО</th><th>Должность</th><th>Компания</th><th>Email</th><th></th></tr>' +
+      active.map((e) =>
+        '<tr><td>' + e["ФИО"] + '</td><td>' + e["Должность"] + '</td><td>' + e["Company ID"] + '</td><td>' + e["Email"] + '</td>' +
+        '<td><span class="link" onclick="openEmployeeCard(\'' + e["Employee ID"] + '\')">Открыть</span></td></tr>'
+      ).join("") + '</table>';
+    document.getElementById("employeesList").innerHTML = html || "Сотрудников пока нет.";
+  });
+}
+
+function renderDismissed() {
+  mainHtml('<div class="card"><h1>Уволенные сотрудники</h1><div id="dismissedList">Загрузка...</div></div>');
+  callGet("getEmployees", {}, (rows) => {
+    const dismissed = rows.filter((e) => e["Статус сотрудника"] === "Уволен");
+    const html = '<table><tr><th>ФИО</th><th>Компания</th><th>Дата увольнения</th></tr>' +
+      dismissed.map((e) => '<tr><td>' + e["ФИО"] + '</td><td>' + e["Company ID"] + '</td><td>' + fmtDate(e["Дата увольнения"]) + '</td></tr>').join("") +
+      '</table>';
+    document.getElementById("dismissedList").innerHTML = html || "Уволенных сотрудников нет.";
+  });
+}
+
+function fmtDate(d) {
+  if (!d) return "—";
+  try { return new Date(d).toLocaleDateString("ru-RU"); } catch (e) { return String(d); }
+}
+
+function openEmployeeCard(employeeId) {
+  callGet("getEmployee", { employeeId: employeeId }, (emp) => {
+    callGet("getCardsForEmployee", { employeeId: employeeId }, (cards) => {
+      callGet("getCardIssuanceInfo", { employeeId: employeeId }, (info) => {
+        renderEmployeeDetail(emp, cards, info);
+      });
+    });
+  });
+}
+
+function renderEmployeeDetail(emp, cards, info) {
+  const canManage = ["ADMIN_BC", "HR", "OFFICE_MANAGER"].indexOf(CURRENT_USER.role) !== -1;
+  let html = '<div class="card"><span class="link" onclick="renderEmployees()">&larr; Назад к списку</span>';
+  html += '<h1 style="margin-top:10px">' + emp["ФИО"] + '</h1>';
+  html += '<div class="row"><div><label>Должность</label>' + (emp["Должность"] || "—") +
+    '</div><div><label>Email</label>' + emp["Email"] + '</div></div>';
+  html += '<div class="row"><div><label>Телефон</label>' + (emp["Телефон"] || "—") +
+    '</div><div><label>ИИН</label>' + emp["ИИН"] + '</div></div>';
+  if (emp["Есть автомобиль"] === true || emp["Есть автомобиль"] === "TRUE") {
+    html += '<div class="row"><div><label>Автомобиль</label>' + emp["Марка"] + " " + emp["Модель"] + ' (' + emp["Госномер"] + ', ' + emp["Цвет"] + ')</div></div>';
+  }
+
+  html += '<h2 style="margin-top:20px">История карт</h2>';
+  html += '<table><tr><th>№</th><th>Тип</th><th>Дата выпуска</th><th>Дата аннулирования</th><th>Статус</th>' + (canManage ? '<th></th>' : '') + '</tr>';
+  cards.forEach((c) => {
+    html += '<tr><td>' + c["№ выпуска"] + '</td><td>' + c["Тип выпуска"] + '</td><td>' + fmtDate(c["Дата выпуска"]) + '</td><td>' + fmtDate(c["Дата аннулирования"]) + '</td><td>' + c["Статус"] + '</td>';
+    if (canManage) {
+      html += '<td>' + (c["Статус"] === "Активна" ? '<span class="link" onclick="revokeCardPrompt(\'' + c["Card ID"] + '\',\'' + emp["Employee ID"] + '\')">Аннулировать</span>' : "") + '</td>';
+    }
+    html += '</tr>';
+  });
+  html += '</table>';
+
+  if (canManage && emp["Статус сотрудника"] === "Активен") {
+    html += '<div style="margin-top:16px; display:flex; gap:10px; flex-wrap:wrap">';
+    if (!info.maxReached) {
+      html += '<button class="btn" onclick="submitApplicationFor(\'' + emp["Employee ID"] + '\')">Подать заявку на ' + (info.isReissue ? "повторный" : "первичный") + ' выпуск карты</button>';
+    } else {
+      html += '<div style="color:#DC2626; font-size:13px">Достигнуто максимальное количество карт (5).</div>';
+    }
+    html += '<button class="btn danger" onclick="dismissEmployeePrompt(\'' + emp["Employee ID"] + '\')">Уволить сотрудника</button>';
+    html += '</div>';
+  }
+
+  mainHtml(html);
+}
+
+function submitApplicationFor(employeeId) {
+  callGet("getCardIssuanceInfo", { employeeId: employeeId }, (info) => {
+    let ack = true;
+    if (info.isReissue) {
+      ack = confirm(info.feeText + "\n\nЯ ознакомлен(а) с условиями повторного выпуска карты. Продолжить?");
+      if (!ack) return;
+    }
+    callPost("submitApplication", { employeeId: employeeId, applicationType: null, acknowledgedFee: ack }, () => {
+      showMsg("Заявка подана");
+      openEmployeeCard(employeeId);
+    });
+  });
+}
+
+function revokeCardPrompt(cardId, employeeId) {
+  const reason = prompt("Причина аннулирования карты:");
+  if (reason === null) return;
+  callPost("revokeCard", { cardId: cardId, reason: reason }, () => { showMsg("Карта аннулирована"); openEmployeeCard(employeeId); });
+}
+
+function dismissEmployeePrompt(employeeId) {
+  if (!confirm("Уволить сотрудника? Активная карта будет автоматически аннулирована.")) return;
+  callPost("dismissEmployee", { employeeId: employeeId }, () => { showMsg("Сотрудник уволен"); renderEmployees(); });
+}
+
+// ---------------------------------------------------------------------------
+// Добавление сотрудника (офис-менеджер)
+// ---------------------------------------------------------------------------
+function renderAddEmployee() {
+  const isAdmin = CURRENT_USER.role === "ADMIN_BC";
+  const companyField = isAdmin
+    ? '<label>Компания *</label><select id="empCompanyId"></select>'
+    : '<input type="hidden" id="empCompanyId" value="' + CURRENT_USER.companyId + '">';
+  mainHtml(
+    '<div class="card"><h1>Добавить нового сотрудника</h1>' +
+    (isAdmin ? '<div style="margin-bottom:10px">' + companyField + '</div>' : companyField) +
+    '<div class="row"><div><label>ФИО *</label><input id="empFullName"></div>' +
+    '<div><label>ИИН * (12 цифр)</label><input id="empIin" maxlength="12"></div></div>' +
+    '<div class="row"><div><label>Должность</label><input id="empPosition"></div>' +
+    '<div><label>Телефон</label><input id="empPhone"></div></div>' +
+    '<label>Email *</label><input id="empEmail">' +
+    '<label><input type="checkbox" id="empHasCar" style="width:auto" onchange="toggleCarFields()"> Есть автомобиль</label>' +
+    '<div id="carFields" class="hidden">' +
+    '<div class="row"><div><label>Марка</label><input id="empCarMake"></div><div><label>Модель</label><input id="empCarModel"></div></div>' +
+    '<div class="row"><div><label>Госномер</label><input id="empCarPlate"></div><div><label>Цвет</label><input id="empCarColor"></div></div>' +
+    '</div>' +
+    '<button class="btn" onclick="submitNewEmployee()">Создать сотрудника</button></div>'
+  );
+  if (isAdmin) {
+    callGet("getCompanies", {}, (rows) => {
+      document.getElementById("empCompanyId").innerHTML = rows.map((c) => '<option value="' + c["Company ID"] + '">' + c["Название"] + '</option>').join("");
+    });
+  }
+}
+function toggleCarFields() {
+  document.getElementById("carFields").classList.toggle("hidden", !document.getElementById("empHasCar").checked);
+}
+function submitNewEmployee() {
+  const data = {
+    fullName: document.getElementById("empFullName").value.trim(),
+    iin: document.getElementById("empIin").value.trim(),
+    position: document.getElementById("empPosition").value.trim(),
+    phone: document.getElementById("empPhone").value.trim(),
+    email: document.getElementById("empEmail").value.trim(),
+    hasCar: document.getElementById("empHasCar").checked,
+    carMake: document.getElementById("empCarMake").value.trim(),
+    carModel: document.getElementById("empCarModel").value.trim(),
+    carPlate: document.getElementById("empCarPlate").value.trim(),
+    carColor: document.getElementById("empCarColor").value.trim(),
+    companyId: document.getElementById("empCompanyId").value,
+  };
+  callPost("createEmployee", { data: JSON.stringify(data) }, (res) => {
+    showMsg("Сотрудник создан");
+    openEmployeeCard(res.employeeId);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Заявки — общий список (HR / OFFICE_MANAGER / ADMIN_BC)
+// ---------------------------------------------------------------------------
+function renderApplications() {
+  mainHtml('<div class="card"><h1>Заявки</h1><div id="appsList">Загрузка...</div></div>');
+  callGet("getApplications", {}, (rows) => {
+    callGet("getEmployees", {}, (employees) => {
+      const empMap = {};
+      employees.forEach((e) => (empMap[e["Employee ID"]] = e["ФИО"]));
+      rows.sort((a, b) => new Date(b["Дата создания"]) - new Date(a["Дата создания"]));
+      let html = '<table><tr><th>№</th><th>Сотрудник</th><th>Тип</th><th>Статус</th><th>Дата</th><th></th></tr>';
+      rows.forEach((a) => {
+        html += '<tr><td>' + a["Application ID"] + '</td><td>' + (empMap[a["Employee ID"]] || "—") + '</td><td>' + a["Тип заявки"] + '</td><td>' + badge(a["Статус"]) + '</td><td>' + fmtDate(a["Дата создания"]) + '</td>';
+        html += '<td>' + applicationActionsHtml(a) + '</td></tr>';
+      });
+      html += '</table>';
+      document.getElementById("appsList").innerHTML = html || "Заявок нет.";
+    });
+  });
+}
+
+function applicationActionsHtml(a) {
+  const id = a["Application ID"];
+  if (CURRENT_USER.role === "HR" && a["Статус"] === "На согласовании HR") {
+    return '<span class="link" onclick="approveHRAction(\'' + id + '\')">Одобрить</span> · ' +
+           '<span class="link" onclick="rejectHRAction(\'' + id + '\')">Отклонить</span>';
+  }
+  if (CURRENT_USER.role === "ADMIN_BC" && a["Статус"] === "На рассмотрении администратора БЦ") {
+    return '<span class="link" onclick="approveBCAction(\'' + id + '\')">Одобрить</span> · ' +
+           '<span class="link" onclick="rejectBCAction(\'' + id + '\')">Отклонить</span>';
+  }
+  return "";
+}
+function approveHRAction(id) { callPost("approveHR", { applicationId: id }, () => { showMsg("Одобрено"); renderApplications(); }); }
+function rejectHRAction(id) {
+  const reason = prompt("Причина отклонения:");
+  if (!reason) return;
+  callPost("rejectHR", { applicationId: id, reason: reason }, () => { showMsg("Отклонено"); renderApplications(); });
+}
+function approveBCAction(id) { callPost("approveBC", { applicationId: id }, () => { showMsg("Одобрено, передано инженеру"); renderApplications(); }); }
+function rejectBCAction(id) {
+  const reason = prompt("Причина отклонения:");
+  if (!reason) return;
+  callPost("rejectBC", { applicationId: id, reason: reason }, () => { showMsg("Отклонено"); renderApplications(); });
+}
+
+// ---------------------------------------------------------------------------
+// Очередь инженера
+// ---------------------------------------------------------------------------
+function renderEngineerQueue() {
+  mainHtml('<div class="card"><h1>Заявки на выпуск карты</h1><div id="engList">Загрузка...</div></div>');
+  callGet("getApplications", {}, (rows) => {
+    const pending = rows.filter((a) => a["Статус"] === "Передано инженеру");
+    callGet("getEmployees", {}, (employees) => {
+      const empMap = {};
+      employees.forEach((e) => (empMap[e["Employee ID"]] = e));
+      let html = pending.length ? '<table><tr><th>Сотрудник</th><th>Компания</th><th>Тип</th><th></th></tr>' : "Заявок для выпуска нет.";
+      pending.forEach((a) => {
+        const emp = empMap[a["Employee ID"]] || {};
+        html += '<tr><td>' + (emp["ФИО"] || "—") + '</td><td>' + a["Company ID"] + '</td><td>' + a["Тип заявки"] + '</td>' +
+          '<td><span class="link" onclick="issueCardForm(\'' + a["Application ID"] + '\')">Выпустить карту</span></td></tr>';
+      });
+      if (pending.length) html += '</table>';
+      document.getElementById("engList").innerHTML = html;
+    });
+  });
+}
+function issueCardForm(applicationId) {
+  mainHtml(
+    '<div class="card"><h1>Выпуск карты</h1>' +
+    '<label>Номер карты</label><input id="issueCardNumber">' +
+    '<button class="btn" onclick="confirmIssueCard(\'' + applicationId + '\')">Выпустить</button> ' +
+    '<span class="link" onclick="renderEngineerQueue()">Отмена</span></div>'
+  );
+}
+function confirmIssueCard(applicationId) {
+  const cardNumber = document.getElementById("issueCardNumber").value.trim();
+  callPost("issueCard", { applicationId: applicationId, cardNumber: cardNumber }, () => {
+    showMsg("Карта выпущена");
+    renderEngineerQueue();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Пользователи системы (ADMIN_BC)
+// ---------------------------------------------------------------------------
+function renderUsers() {
+  mainHtml('<div class="card"><h1>Пользователи системы</h1><div id="usersList">Загрузка...</div>' +
+    '<h2 style="margin-top:20px">Добавить пользователя</h2>' +
+    '<div class="row"><div><label>Email (рабочий, на него придёт код входа)</label><input id="newUserEmail"></div>' +
+    '<div><label>ФИО</label><input id="newUserName"></div></div>' +
+    '<div class="row"><div><label>Роль</label><select id="newUserRole" onchange="toggleUserCompanyField()">' +
+    '<option value="HR">HR</option><option value="OFFICE_MANAGER">Офис-менеджер</option>' +
+    '<option value="ENGINEER">Инженер</option><option value="ADMIN_BC">Администратор БЦ</option></select></div>' +
+    '<div id="newUserCompanyBox"><label>Компания</label><select id="newUserCompany"></select></div></div>' +
+    '<button class="btn" onclick="submitNewUser()">Добавить</button></div>');
+  callGet("getUsers", {}, (rows) => {
+    const html = '<table><tr><th>Email</th><th>ФИО</th><th>Роль</th><th>Компания</th><th>Статус</th></tr>' +
+      rows.map((u) => '<tr><td>' + u["Email"] + '</td><td>' + u["ФИО"] + '</td><td>' + u["Роль"] + '</td><td>' + (u["Company ID"] || "—") + '</td><td>' + u["Статус"] + '</td></tr>').join("") +
+      '</table>';
+    document.getElementById("usersList").innerHTML = html;
+  });
+  callGet("getCompanies", {}, (rows) => {
+    const select = document.getElementById("newUserCompany");
+    select.innerHTML = rows.map((c) => '<option value="' + c["Company ID"] + '">' + c["Название"] + '</option>').join("");
+  });
+}
+function toggleUserCompanyField() {
+  const role = document.getElementById("newUserRole").value;
+  document.getElementById("newUserCompanyBox").classList.toggle("hidden", role === "ADMIN_BC" || role === "ENGINEER");
+}
+function submitNewUser() {
+  const email = document.getElementById("newUserEmail").value.trim();
+  const name = document.getElementById("newUserName").value.trim();
+  const role = document.getElementById("newUserRole").value;
+  const companyBox = document.getElementById("newUserCompanyBox");
+  const companyId = companyBox.classList.contains("hidden") ? null : document.getElementById("newUserCompany").value;
+  callPost("createUser", { email: email, fullName: name, role: role, companyId: companyId }, () => { showMsg("Пользователь добавлен"); renderUsers(); });
+}
+
+// ---------------------------------------------------------------------------
+// Личный кабинет сотрудника
+// ---------------------------------------------------------------------------
+function renderProfile() {
+  mainHtml('<div class="card"><h1>Мой профиль</h1><div id="profileBox">Загрузка...</div></div>');
+  findMyEmployee((emp) => {
+    if (!emp) { document.getElementById("profileBox").innerHTML = "Ваш профиль сотрудника ещё не создан. Обратитесь к офис-менеджеру."; return; }
+    let html = '<div class="row"><div><label>ФИО</label>' + emp["ФИО"] + '</div><div><label>Должность</label>' + (emp["Должность"] || "—") + '</div></div>';
+    html += '<div class="row"><div><label>Телефон</label>' + (emp["Телефон"] || "—") + '</div><div><label>Email</label>' + emp["Email"] + '</div></div>';
+    html += '<h2 style="margin-top:16px">Автомобиль</h2>';
+    const hasCar = emp["Есть автомобиль"] === true || emp["Есть автомобиль"] === "TRUE";
+    html += '<label><input type="checkbox" id="myHasCar" style="width:auto" ' + (hasCar ? "checked" : "") + ' onchange="toggleCarFields()"> Есть автомобиль</label>';
+    html += '<div id="carFields" class="' + (hasCar ? "" : "hidden") + '">';
+    html += '<div class="row"><div><label>Марка</label><input id="empCarMake" value="' + (emp["Марка"] || "") + '"></div><div><label>Модель</label><input id="empCarModel" value="' + (emp["Модель"] || "") + '"></div></div>';
+    html += '<div class="row"><div><label>Госномер</label><input id="empCarPlate" value="' + (emp["Госномер"] || "") + '"></div><div><label>Цвет</label><input id="empCarColor" value="' + (emp["Цвет"] || "") + '"></div></div>';
+    html += '</div>';
+    html += '<button class="btn" onclick="saveMyProfile(\'' + emp["Employee ID"] + '\')">Сохранить</button>';
+    document.getElementById("profileBox").innerHTML = html;
+  });
+}
+function saveMyProfile(employeeId) {
+  const data = {
+    hasCar: document.getElementById("myHasCar").checked,
+    carMake: document.getElementById("empCarMake").value.trim(),
+    carModel: document.getElementById("empCarModel").value.trim(),
+    carPlate: document.getElementById("empCarPlate").value.trim(),
+    carColor: document.getElementById("empCarColor").value.trim(),
+  };
+  callPost("updateEmployee", { employeeId: employeeId, data: JSON.stringify(data) }, () => showMsg("Сохранено"));
+}
+
+function findMyEmployee(cb) {
+  callGet("getMyEmployeeRecord", {}, cb);
+}
+
+function renderMyCards() {
+  mainHtml('<div class="card"><h1>Мои карты</h1><div id="myCardsBox">Загрузка...</div></div>');
+  findMyEmployee((emp) => {
+    if (!emp) { document.getElementById("myCardsBox").innerHTML = "Профиль не найден."; return; }
+    callGet("getCardsForEmployee", { employeeId: emp["Employee ID"] }, (cards) => {
+      let html = cards.length ? '<table><tr><th>№</th><th>Тип</th><th>Дата выпуска</th><th>Статус</th></tr>' : "Карт пока нет.";
+      cards.forEach((c) => {
+        html += '<tr><td>' + c["№ выпуска"] + '</td><td>' + c["Тип выпуска"] + '</td><td>' + fmtDate(c["Дата выпуска"]) + '</td><td>' + c["Статус"] + '</td></tr>';
+      });
+      if (cards.length) html += '</table>';
+      document.getElementById("myCardsBox").innerHTML = html;
+    });
+  });
+}
+
+function renderMyApplications() {
+  mainHtml('<div class="card"><h1>Мои заявки</h1><div id="myAppsBox">Загрузка...</div>' +
+    '<div style="margin-top:14px"><button class="btn" onclick="submitMyReissue()">Подать заявку на перевыпуск карты</button></div></div>');
+  findMyEmployee((emp) => {
+    if (!emp) { document.getElementById("myAppsBox").innerHTML = "Профиль не найден."; return; }
+    callGet("getApplications", {}, (rows) => {
+      const mine = rows.filter((a) => a["Employee ID"] === emp["Employee ID"]);
+      let html = mine.length ? '<table><tr><th>Тип</th><th>Статус</th><th>Дата</th><th>Причина отказа</th></tr>' : "Заявок пока нет.";
+      mine.forEach((a) => {
+        html += '<tr><td>' + a["Тип заявки"] + '</td><td>' + badge(a["Статус"]) + '</td><td>' + fmtDate(a["Дата создания"]) + '</td><td>' + (a["Причина отказа HR"] || a["Причина отказа БЦ"] || "—") + '</td></tr>';
+      });
+      if (mine.length) html += '</table>';
+      document.getElementById("myAppsBox").innerHTML = html;
+    });
+  });
+}
+function submitMyReissue() {
+  findMyEmployee((emp) => {
+    if (!emp) return;
+    submitApplicationFor(emp["Employee ID"]);
+  });
+}
+</script>
+</body>
+</html>
