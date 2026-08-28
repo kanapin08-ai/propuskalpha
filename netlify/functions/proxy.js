@@ -2,7 +2,7 @@
 // Браузер обращается сюда (на тот же домен netlify.app, поэтому CORS не мешает),
 // а эта функция уже сама, на сервере, обращается к Apps Script и отдаёт ответ обратно.
 
-const APP_URL = "https://script.google.com/macros/s/AKfycbzzGLIhdNrPvWD29qSGnZ58ki8Ya4ImkTXlq5HNrpmZLe_KKkrZIioaLIrMPBDnql2Z/exec"
+const APP_URL = "https://script.google.com/macros/s/AKfycbx80JjM3EgPwiioe-nztDp1EFdblkNXWee7IoKnTkKWz8S_Z-4We0ariU_dJ4E8qgnd/exec"
 exports.handler = async function (event) {
   try {
     const url = new URL(APP_URL);
